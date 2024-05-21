@@ -692,6 +692,13 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		if webhookurl != "" {
 			log.Info().Str("url", webhookurl).Msg("Calling webhook")
 			values, _ := json.Marshal(postmap)
+
+			// if IsGroup return
+			if strings.Contains(string(values), `"IsGroup":true`) {
+            			log.Info().Msg("Payload contains IsGroup: true")
+            			return
+            		}
+			
 			if path == "" {
 				data := make(map[string]string)
 				data["jsonData"] = string(values)
