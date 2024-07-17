@@ -1,7 +1,7 @@
 openapi: 3.0.0
 info:
-  title: WUZAPI
-  description: "WSW API implements a REST API for WhatsApp.\n"
+  title: W-API
+  description: "W-API implements a BASIC REST API for WhatsApp.\n"
   version: '3.0'
   termsOfService: ''
    
