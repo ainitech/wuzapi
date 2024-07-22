@@ -1,9 +1,27 @@
 openapi: 3.0.0
 info:
   title: W-API
-  description: "W-API implements a BASIC REST API for WhatsApp.\n"
-  version: '3.0'
-  termsOfService: ''
+  description: >-
+    W-API Basic implements a REST API for WhatsApp.
+
+
+    For authentication you must pass the 'token' header with a token that you created
+    using init endpoint.
+
+
+    You can insert a new user into db by hitting init endpoint.
+
+    
+
+    You will need to scan the QR code using your own front end or you could use
+    the provided one [here](/login?token=1234ABCD).
+
+    To receive messages you will need to create your own server and set its URL
+    as hook using the [webhook](#Webhook) API call.
+
+     <b>PS:</b> Phone numbers should have country code with or without the <b>+</b> sign eg: <b>5511987654321</b> or <b>+5511987654321</b>, but natively whatsapp requires no plus sign prefix.
+  version: "3.0"
+  termsOfService: ""
    
 schemes:
   - http
