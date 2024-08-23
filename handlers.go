@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"net/http"
 	"os"
 	"strconv"
@@ -565,6 +566,62 @@ func (s *server) Logout() http.HandlerFunc {
 	}
 }
 
+// Pair by Phone. Retrieves the code to pair by phone number instead of QR
+func (s *server) PairPhone() http.HandlerFunc {
+
+	type pairStruct struct {
+		Phone       string
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		userid, _ := strconv.Atoi(txtid)
+
+		if clientPointer[userid] == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("No session"))
+			return
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		var t pairStruct
+		err := decoder.Decode(&t)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Could not decode Payload"))
+			return
+		}
+
+		if t.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Missing Phone in Payload"))
+			return
+		}
+
+		isLoggedIn := clientPointer[userid].IsLoggedIn()
+		if(isLoggedIn) {
+			log.Error().Msg(fmt.Sprintf("%s", "Already paired"))
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Already paired"))
+			return
+		}
+
+		linkingCode, err := clientPointer[userid].PairPhone(t.Phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+		if err != nil {
+			log.Error().Msg(fmt.Sprintf("%s", err))
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		response := map[string]interface{}{"LinkingCode": linkingCode}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+		return
+	}
+}
+
+
 // Gets Connected and LoggedIn Status
 func (s *server) GetStatus() http.HandlerFunc {
 
@@ -596,6 +653,7 @@ func (s *server) GetStatus() http.HandlerFunc {
 func (s *server) SendDocument() http.HandlerFunc {
 
 	type documentStruct struct {
+		Caption     string
 		Phone       string
 		Document    string
 		FileName    string
@@ -638,7 +696,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 			return
 		}
 
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaId, t.ContextInfo.Participant)
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
@@ -673,25 +731,26 @@ func (s *server) SendDocument() http.HandlerFunc {
 		}
 
 		msg := &waProto.Message{DocumentMessage: &waProto.DocumentMessage{
-			Url:           proto.String(uploaded.URL),
+			URL:           proto.String(uploaded.URL),
 			FileName:      &t.FileName,
 			DirectPath:    proto.String(uploaded.DirectPath),
 			MediaKey:      uploaded.MediaKey,
 			Mimetype:      proto.String(http.DetectContentType(filedata)),
-			FileEncSha256: uploaded.FileEncSHA256,
-			FileSha256:    uploaded.FileSHA256,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
+			Caption:       proto.String(t.Caption),
 		}}
 
-		if t.ContextInfo.StanzaId != nil {
+		if t.ContextInfo.StanzaID != nil {
 			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaId:      proto.String(*t.ContextInfo.StanzaId),
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
 				Participant:   proto.String(*t.ContextInfo.Participant),
 				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
 			}
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -750,7 +809,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 			return
 		}
 
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaId, t.ContextInfo.Participant)
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
@@ -784,30 +843,30 @@ func (s *server) SendAudio() http.HandlerFunc {
 			return
 		}
 
-		ptt := true
-		mime := "audio/ogg; codecs=opus"
+        ptt := true
+        mime := "audio/ogg; codecs=opus"
 
 		msg := &waProto.Message{AudioMessage: &waProto.AudioMessage{
-			Url:        proto.String(uploaded.URL),
-			DirectPath: proto.String(uploaded.DirectPath),
-			MediaKey:   uploaded.MediaKey,
-			//Mimetype:      proto.String(http.DetectContentType(filedata)),
+			URL:           proto.String(uploaded.URL),
+			DirectPath:    proto.String(uploaded.DirectPath),
+			MediaKey:      uploaded.MediaKey,
+            //Mimetype:      proto.String(http.DetectContentType(filedata)),
 			Mimetype:      &mime,
-			FileEncSha256: uploaded.FileEncSHA256,
-			FileSha256:    uploaded.FileSHA256,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
-			Ptt:           &ptt,
+            PTT:           &ptt,
 		}}
 
-		if t.ContextInfo.StanzaId != nil {
+		if t.ContextInfo.StanzaID != nil {
 			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaId:      proto.String(*t.ContextInfo.StanzaId),
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
 				Participant:   proto.String(*t.ContextInfo.Participant),
 				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
 			}
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -866,7 +925,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaId, t.ContextInfo.Participant)
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
@@ -902,24 +961,24 @@ func (s *server) SendImage() http.HandlerFunc {
 
 		msg := &waProto.Message{ImageMessage: &waProto.ImageMessage{
 			Caption:       proto.String(t.Caption),
-			Url:           proto.String(uploaded.URL),
+			URL:           proto.String(uploaded.URL),
 			DirectPath:    proto.String(uploaded.DirectPath),
 			MediaKey:      uploaded.MediaKey,
 			Mimetype:      proto.String(http.DetectContentType(filedata)),
-			FileEncSha256: uploaded.FileEncSHA256,
-			FileSha256:    uploaded.FileSHA256,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
 		}}
 
-		if t.ContextInfo.StanzaId != nil {
+		if t.ContextInfo.StanzaID != nil {
 			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaId:      proto.String(*t.ContextInfo.StanzaId),
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
 				Participant:   proto.String(*t.ContextInfo.Participant),
 				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
 			}
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -978,7 +1037,7 @@ func (s *server) SendSticker() http.HandlerFunc {
 			return
 		}
 
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaId, t.ContextInfo.Participant)
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
@@ -1013,25 +1072,25 @@ func (s *server) SendSticker() http.HandlerFunc {
 		}
 
 		msg := &waProto.Message{StickerMessage: &waProto.StickerMessage{
-			Url:           proto.String(uploaded.URL),
+			URL:           proto.String(uploaded.URL),
 			DirectPath:    proto.String(uploaded.DirectPath),
 			MediaKey:      uploaded.MediaKey,
 			Mimetype:      proto.String(http.DetectContentType(filedata)),
-			FileEncSha256: uploaded.FileEncSHA256,
-			FileSha256:    uploaded.FileSHA256,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
 			PngThumbnail:  t.PngThumbnail,
 		}}
 
-		if t.ContextInfo.StanzaId != nil {
+		if t.ContextInfo.StanzaID != nil {
 			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaId:      proto.String(*t.ContextInfo.StanzaId),
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
 				Participant:   proto.String(*t.ContextInfo.Participant),
 				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
 			}
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1057,7 +1116,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 		Video         string
 		Caption       string
 		Id            string
-		JpegThumbnail []byte
+		JPEGThumbnail []byte
 		ContextInfo   waProto.ContextInfo
 	}
 
@@ -1091,7 +1150,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 			return
 		}
 
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaId, t.ContextInfo.Participant)
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
@@ -1127,25 +1186,25 @@ func (s *server) SendVideo() http.HandlerFunc {
 
 		msg := &waProto.Message{VideoMessage: &waProto.VideoMessage{
 			Caption:       proto.String(t.Caption),
-			Url:           proto.String(uploaded.URL),
+			URL:           proto.String(uploaded.URL),
 			DirectPath:    proto.String(uploaded.DirectPath),
 			MediaKey:      uploaded.MediaKey,
 			Mimetype:      proto.String(http.DetectContentType(filedata)),
-			FileEncSha256: uploaded.FileEncSHA256,
-			FileSha256:    uploaded.FileSHA256,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
-			JpegThumbnail: t.JpegThumbnail,
+			JPEGThumbnail: t.JPEGThumbnail,
 		}}
 
-		if t.ContextInfo.StanzaId != nil {
+		if t.ContextInfo.StanzaID != nil {
 			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaId:      proto.String(*t.ContextInfo.StanzaId),
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
 				Participant:   proto.String(*t.ContextInfo.Participant),
 				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
 			}
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1207,7 +1266,7 @@ func (s *server) SendContact() http.HandlerFunc {
 			return
 		}
 
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaId, t.ContextInfo.Participant)
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
@@ -1225,15 +1284,15 @@ func (s *server) SendContact() http.HandlerFunc {
 			Vcard:       &t.Vcard,
 		}}
 
-		if t.ContextInfo.StanzaId != nil {
+		if t.ContextInfo.StanzaID != nil {
 			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaId:      proto.String(*t.ContextInfo.StanzaId),
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
 				Participant:   proto.String(*t.ContextInfo.Participant),
 				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
 			}
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1296,7 +1355,7 @@ func (s *server) SendLocation() http.HandlerFunc {
 			return
 		}
 
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaId, t.ContextInfo.Participant)
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
@@ -1315,15 +1374,15 @@ func (s *server) SendLocation() http.HandlerFunc {
 			Name:             &t.Name,
 		}}
 
-		if t.ContextInfo.StanzaId != nil {
+		if t.ContextInfo.StanzaID != nil {
 			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaId:      proto.String(*t.ContextInfo.StanzaId),
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
 				Participant:   proto.String(*t.ContextInfo.Participant),
 				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
 			}
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1345,15 +1404,15 @@ func (s *server) SendLocation() http.HandlerFunc {
 
 func (s *server) SendButtons() http.HandlerFunc {
 
-	type buttonStruct struct {
-		ButtonId   string
-		ButtonText string
-	}
+    type buttonStruct struct {
+        ButtonId   string
+        ButtonText string
+    }
 	type textStruct struct {
-		Phone   string
-		Title   string
-		Buttons []buttonStruct
-		Id      string
+        Phone   string
+        Title   string
+        Buttons []buttonStruct
+        Id      string
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1387,14 +1446,14 @@ func (s *server) SendButtons() http.HandlerFunc {
 			return
 		}
 
-		if len(t.Buttons) < 1 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Buttons in Payload"))
-			return
-		}
-		if len(t.Buttons) > 3 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("buttons cant more than 3"))
-			return
-		}
+        if len(t.Buttons) < 1 {
+            s.Respond(w, r, http.StatusBadRequest, errors.New("missing Buttons in Payload"))
+            return
+        }
+        if len(t.Buttons) > 3 {
+            s.Respond(w, r, http.StatusBadRequest, errors.New("buttons cant more than 3"))
+            return
+        }
 
 		recipient, ok := parseJID(t.Phone)
 		if !ok {
@@ -1408,32 +1467,32 @@ func (s *server) SendButtons() http.HandlerFunc {
 			msgid = t.Id
 		}
 
-		var buttons []*waProto.ButtonsMessage_Button
+        var buttons []*waProto.ButtonsMessage_Button
 
-		for _, item := range t.Buttons {
-			buttons = append(buttons, &waProto.ButtonsMessage_Button{
-				ButtonId:       proto.String(item.ButtonId),
-				ButtonText:     &waProto.ButtonsMessage_Button_ButtonText{DisplayText: proto.String(item.ButtonText)},
-				Type:           waProto.ButtonsMessage_Button_RESPONSE.Enum(),
-				NativeFlowInfo: &waProto.ButtonsMessage_Button_NativeFlowInfo{},
-			})
-		}
+        for _, item := range t.Buttons {
+            buttons = append(buttons, &waProto.ButtonsMessage_Button{
+                ButtonID:       proto.String(item.ButtonId),
+                ButtonText:     &waProto.ButtonsMessage_Button_ButtonText{DisplayText: proto.String(item.ButtonText)},
+                Type:           waProto.ButtonsMessage_Button_RESPONSE.Enum(),
+                NativeFlowInfo: &waProto.ButtonsMessage_Button_NativeFlowInfo{},
+            })
+        }
 
-		msg2 := &waProto.ButtonsMessage{
-			ContentText: proto.String(t.Title),
-			HeaderType:  waProto.ButtonsMessage_EMPTY.Enum(),
-			Buttons:     buttons,
-		}
+        msg2 := &waProto.ButtonsMessage{
+            ContentText: proto.String(t.Title),
+            HeaderType:  waProto.ButtonsMessage_EMPTY.Enum(),
+            Buttons:     buttons,
+        }
 
 		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, &waProto.Message{ViewOnceMessage: &waProto.FutureProofMessage{
-			Message: &waProto.Message{
-				ButtonsMessage: msg2,
-			},
-		}})
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
-			return
-		}
+            Message: &waProto.Message{
+                ButtonsMessage: msg2,
+            },
+        }}, whatsmeow.SendRequestExtra{ID: msgid})
+        if err != nil {
+            s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
+            return
+        }
 
 		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
@@ -1451,141 +1510,141 @@ func (s *server) SendButtons() http.HandlerFunc {
 // https://github.com/tulir/whatsmeow/issues/305
 func (s *server) SendList() http.HandlerFunc {
 
-	type rowsStruct struct {
-		RowId       string
-		Title       string
-		Description string
-	}
+    type rowsStruct struct {
+        RowId       string
+        Title       string
+        Description string
+    }
 
-	type sectionsStruct struct {
-		Title string
-		Rows  []rowsStruct
-	}
+    type sectionsStruct struct {
+        Title string
+        Rows  []rowsStruct
+    }
 
-	type listStruct struct {
-		Phone       string
-		Title       string
-		Description string
-		ButtonText  string
-		FooterText  string
-		Sections    []sectionsStruct
-		Id          string
-	}
+    type listStruct struct {
+        Phone       string
+        Title       string
+        Description string
+        ButtonText  string
+        FooterText  string
+        Sections    []sectionsStruct
+        Id          string
+    }
 
-	return func(w http.ResponseWriter, r *http.Request) {
+    return func(w http.ResponseWriter, r *http.Request) {
 
-		txtid := r.Context().Value("userinfo").(Values).Get("Id")
-		userid, _ := strconv.Atoi(txtid)
+        txtid := r.Context().Value("userinfo").(Values).Get("Id")
+        userid, _ := strconv.Atoi(txtid)
 
-		if clientPointer[userid] == nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
-			return
-		}
+        if clientPointer[userid] == nil {
+            s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+            return
+        }
 
-		msgid := ""
-		var resp whatsmeow.SendResponse
+        msgid := ""
+        var resp whatsmeow.SendResponse
 
-		decoder := json.NewDecoder(r.Body)
-		var t listStruct
-		err := decoder.Decode(&t)
-		marshal, _ := json.Marshal(t)
-		fmt.Println(string(marshal))
-		if err != nil {
-			fmt.Println(err)
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
-			return
-		}
+        decoder := json.NewDecoder(r.Body)
+        var t listStruct
+        err := decoder.Decode(&t)
+        marshal, _ := json.Marshal(t)
+        fmt.Println(string(marshal))
+        if err != nil {
+            fmt.Println(err)
+            s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
+            return
+        }
 
-		if t.Phone == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
-			return
-		}
+        if t.Phone == "" {
+            s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
+            return
+        }
 
-		if t.Title == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Title in Payload"))
-			return
-		}
+        if t.Title == "" {
+            s.Respond(w, r, http.StatusBadRequest, errors.New("missing Title in Payload"))
+            return
+        }
 
-		if t.Description == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Description in Payload"))
-			return
-		}
+        if t.Description == "" {
+            s.Respond(w, r, http.StatusBadRequest, errors.New("missing Description in Payload"))
+            return
+        }
 
-		if t.ButtonText == "" {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing ButtonText in Payload"))
-			return
-		}
+        if t.ButtonText == "" {
+            s.Respond(w, r, http.StatusBadRequest, errors.New("missing ButtonText in Payload"))
+            return
+        }
 
-		if len(t.Sections) < 1 {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Sections in Payload"))
-			return
-		}
-		recipient, ok := parseJID(t.Phone)
-		if !ok {
-			s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Phone"))
-			return
-		}
+        if len(t.Sections) < 1 {
+            s.Respond(w, r, http.StatusBadRequest, errors.New("missing Sections in Payload"))
+            return
+        }
+        recipient, ok := parseJID(t.Phone)
+        if !ok {
+            s.Respond(w, r, http.StatusBadRequest, errors.New("could not parse Phone"))
+            return
+        }
 
-		if t.Id == "" {
-			msgid = whatsmeow.GenerateMessageID()
-		} else {
-			msgid = t.Id
-		}
+        if t.Id == "" {
+            msgid = whatsmeow.GenerateMessageID()
+        } else {
+            msgid = t.Id
+        }
 
-		var sections []*waProto.ListMessage_Section
+        var sections []*waProto.ListMessage_Section
 
-		for _, item := range t.Sections {
-			var rows []*waProto.ListMessage_Row
-			id := 1
-			for _, row := range item.Rows {
-				var idtext string
-				if row.RowId == "" {
-					idtext = strconv.Itoa(id)
-				} else {
-					idtext = row.RowId
-				}
-				rows = append(rows, &waProto.ListMessage_Row{
-					RowId:       proto.String(idtext),
-					Title:       proto.String(row.Title),
-					Description: proto.String(row.Description),
-				})
-			}
+        for _, item := range t.Sections {
+            var rows []*waProto.ListMessage_Row
+            id := 1
+            for _, row := range item.Rows {
+                var idtext string
+                if row.RowId == "" {
+                    idtext = strconv.Itoa(id)
+                } else {
+                    idtext = row.RowId
+                }
+                rows = append(rows, &waProto.ListMessage_Row{
+                    RowID:       proto.String(idtext),
+                    Title:       proto.String(row.Title),
+                    Description: proto.String(row.Description),
+                })
+            }
 
-			sections = append(sections, &waProto.ListMessage_Section{
-				Title: proto.String(item.Title),
-				Rows:  rows,
-			})
-		}
-		msg1 := &waProto.ListMessage{
-			Title:       proto.String(t.Title),
-			Description: proto.String(t.Description),
-			ButtonText:  proto.String(t.ButtonText),
-			ListType:    waProto.ListMessage_SINGLE_SELECT.Enum(),
-			Sections:    sections,
-			FooterText:  proto.String(t.FooterText),
-		}
+            sections = append(sections, &waProto.ListMessage_Section{
+                Title: proto.String(item.Title),
+                Rows:  rows,
+            })
+        }
+        msg1 := &waProto.ListMessage{
+            Title:       proto.String(t.Title),
+            Description: proto.String(t.Description),
+            ButtonText:  proto.String(t.ButtonText),
+            ListType:    waProto.ListMessage_SINGLE_SELECT.Enum(),
+            Sections:    sections,
+            FooterText:  proto.String(t.FooterText),
+        }
 
 		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, &waProto.Message{
-			ViewOnceMessage: &waProto.FutureProofMessage{
-				Message: &waProto.Message{
-					ListMessage: msg1,
-				},
-			}})
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
-			return
-		}
+            ViewOnceMessage: &waProto.FutureProofMessage{
+                Message: &waProto.Message{
+                    ListMessage: msg1,
+                },
+            }}, whatsmeow.SendRequestExtra{ID: msgid})
+        if err != nil {
+            s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
+            return
+        }
 
-		log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
+        log.Info().Str("timestamp", fmt.Sprintf("%d", resp.Timestamp)).Str("id", msgid).Msg("Message sent")
 		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp, "Id": msgid}
 		responseJson, err := json.Marshal(response)
-		if err != nil {
-			s.Respond(w, r, http.StatusInternalServerError, err)
-		} else {
-			s.Respond(w, r, http.StatusOK, string(responseJson))
-		}
-		return
-	}
+        if err != nil {
+            s.Respond(w, r, http.StatusInternalServerError, err)
+        } else {
+            s.Respond(w, r, http.StatusOK, string(responseJson))
+        }
+        return
+    }
 }
 
 // Sends a regular text message
@@ -1629,7 +1688,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 			return
 		}
 
-		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaId, t.ContextInfo.Participant)
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
 		if err != nil {
 			log.Error().Msg(fmt.Sprintf("%s", err))
 			s.Respond(w, r, http.StatusBadRequest, err)
@@ -1650,15 +1709,15 @@ func (s *server) SendMessage() http.HandlerFunc {
 			},
 		}
 
-		if t.ContextInfo.StanzaId != nil {
+		if t.ContextInfo.StanzaID != nil {
 			msg.ExtendedTextMessage.ContextInfo = &waProto.ContextInfo{
-				StanzaId:      proto.String(*t.ContextInfo.StanzaId),
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
 				Participant:   proto.String(*t.ContextInfo.Participant),
 				QuotedMessage: &waProto.Message{Conversation: proto.String("")},
 			}
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1818,7 +1877,7 @@ func (s *server) SendTemplate() http.HandlerFunc {
 		},
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(),recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(),recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1939,8 +1998,8 @@ func (s *server) GetUser() http.HandlerFunc {
 
 		var jids []types.JID
 		for _, arg := range t.Phone {
-			jid, ok := parseJID(arg)
-			if !ok {
+			jid, err := types.ParseJID(arg)
+			if err != nil {
 				return
 			}
 			jids = append(jids, jid)
@@ -2157,7 +2216,7 @@ func (s *server) DownloadImage() http.HandlerFunc {
 		}
 
 		// check/creates user directory for files
-		userDirectory := fmt.Sprintf("%s/files/user_%s", s.exPath, txtid)
+		userDirectory := filepath.Join(s.exPath, "files", "user_"+txtid)
 		_, err := os.Stat(userDirectory)
 		if os.IsNotExist(err) {
 			errDir := os.MkdirAll(userDirectory, 0751)
@@ -2176,12 +2235,12 @@ func (s *server) DownloadImage() http.HandlerFunc {
 		}
 
 		msg := &waProto.Message{ImageMessage: &waProto.ImageMessage{
-			Url:           proto.String(t.Url),
+			URL:           proto.String(t.Url),
 			DirectPath:    proto.String(t.DirectPath),
 			MediaKey:      t.MediaKey,
 			Mimetype:      proto.String(t.Mimetype),
-			FileEncSha256: t.FileEncSHA256,
-			FileSha256:    t.FileSHA256,
+			FileEncSHA256: t.FileEncSHA256,
+			FileSHA256:    t.FileSHA256,
 			FileLength:    &t.FileLength,
 		}}
 
@@ -2237,7 +2296,7 @@ func (s *server) DownloadDocument() http.HandlerFunc {
 		}
 
 		// check/creates user directory for files
-		userDirectory := fmt.Sprintf("%s/files/user_%s", s.exPath, txtid)
+		userDirectory := filepath.Join(s.exPath, "files", "user_"+txtid)
 		_, err := os.Stat(userDirectory)
 		if os.IsNotExist(err) {
 			errDir := os.MkdirAll(userDirectory, 0751)
@@ -2256,12 +2315,12 @@ func (s *server) DownloadDocument() http.HandlerFunc {
 		}
 
 		msg := &waProto.Message{DocumentMessage: &waProto.DocumentMessage{
-			Url:           proto.String(t.Url),
+			URL:           proto.String(t.Url),
 			DirectPath:    proto.String(t.DirectPath),
 			MediaKey:      t.MediaKey,
 			Mimetype:      proto.String(t.Mimetype),
-			FileEncSha256: t.FileEncSHA256,
-			FileSha256:    t.FileSHA256,
+			FileEncSHA256: t.FileEncSHA256,
+			FileSHA256:    t.FileSHA256,
 			FileLength:    &t.FileLength,
 		}}
 
@@ -2317,7 +2376,7 @@ func (s *server) DownloadVideo() http.HandlerFunc {
 		}
 
 		// check/creates user directory for files
-		userDirectory := fmt.Sprintf("%s/files/user_%s", s.exPath, txtid)
+		userDirectory := filepath.Join(s.exPath, "files", "user_"+txtid)
 		_, err := os.Stat(userDirectory)
 		if os.IsNotExist(err) {
 			errDir := os.MkdirAll(userDirectory, 0751)
@@ -2336,12 +2395,12 @@ func (s *server) DownloadVideo() http.HandlerFunc {
 		}
 
 		msg := &waProto.Message{VideoMessage: &waProto.VideoMessage{
-			Url:           proto.String(t.Url),
+			URL:           proto.String(t.Url),
 			DirectPath:    proto.String(t.DirectPath),
 			MediaKey:      t.MediaKey,
 			Mimetype:      proto.String(t.Mimetype),
-			FileEncSha256: t.FileEncSHA256,
-			FileSha256:    t.FileSHA256,
+			FileEncSHA256: t.FileEncSHA256,
+			FileSHA256:    t.FileSHA256,
 			FileLength:    &t.FileLength,
 		}}
 
@@ -2397,7 +2456,7 @@ func (s *server) DownloadAudio() http.HandlerFunc {
 		}
 
 		// check/creates user directory for files
-		userDirectory := fmt.Sprintf("%s/files/user_%s", s.exPath, txtid)
+		userDirectory := filepath.Join(s.exPath, "files", "user_"+txtid)
 		_, err := os.Stat(userDirectory)
 		if os.IsNotExist(err) {
 			errDir := os.MkdirAll(userDirectory, 0751)
@@ -2416,12 +2475,12 @@ func (s *server) DownloadAudio() http.HandlerFunc {
 		}
 
 		msg := &waProto.Message{AudioMessage: &waProto.AudioMessage{
-			Url:           proto.String(t.Url),
+			URL:           proto.String(t.Url),
 			DirectPath:    proto.String(t.DirectPath),
 			MediaKey:      t.MediaKey,
 			Mimetype:      proto.String(t.Mimetype),
-			FileEncSha256: t.FileEncSHA256,
-			FileSha256:    t.FileSHA256,
+			FileEncSHA256: t.FileEncSHA256,
+			FileSHA256:    t.FileSHA256,
 			FileLength:    &t.FileLength,
 		}}
 
@@ -2517,17 +2576,17 @@ func (s *server) React() http.HandlerFunc {
 		msg := &waProto.Message{
 			ReactionMessage: &waProto.ReactionMessage{
 				Key: &waProto.MessageKey{
-					RemoteJid: proto.String(recipient.String()),
+					RemoteJID: proto.String(recipient.String()),
 					FromMe:    proto.Bool(fromMe),
-					Id:        proto.String(msgid),
+					ID:        proto.String(msgid),
 				},
 				Text:              proto.String(reaction),
 				GroupingKey:       proto.String(reaction),
-				SenderTimestampMs: proto.Int64(time.Now().UnixMilli()),
+				SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
 			},
 		}
 
-		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg)
+		resp, err = clientPointer[userid].SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
