@@ -1,6 +1,6 @@
 module wuzapi
 
-go 1.18
+go 1.23.0
 
 require (
 	github.com/go-resty/resty/v2 v2.7.0
@@ -13,7 +13,7 @@ require (
 	github.com/rs/zerolog v1.33.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/vincent-petithory/dataurl v1.0.0
-	go.mau.fi/whatsmeow v0.0.0-20240821142752-3d63c6fcc1a7
+	go.mau.fi/whatsmeow v0.0.0-20250306135213-ae5c492c5067
 	google.golang.org/protobuf v1.34.2
 	gorm.io/driver/mysql v1.5.2
 	gorm.io/driver/postgres v1.5.4
