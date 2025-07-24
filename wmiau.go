@@ -241,7 +241,8 @@ func (s *server) startClient(userID int, textjid string, token string, subscript
 
 		// If you want multiple sessions, remember their JIDs and use .GetDevice(jid) or .GetAllDevices() instead.
 		//deviceStore, err := container.GetFirstDevice()
-		deviceStore, err = container.GetDevice(jid)
+		ctx := context.Background()
+		deviceStore, err = container.GetDevice(ctx, jid)
 		if err != nil {
 			panic(err)
 		}
@@ -497,8 +498,8 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 					return
 				}
 			}
-
-			data, err := mycli.WAClient.Download(img)
+			ctx := context.Background()
+			data, err := mycli.WAClient.Download(ctx, img)
 			if err != nil {
 				log.Error().Err(err).Msg("Failed to download image")
 				return
@@ -528,7 +529,8 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				}
 			}
 
-			data, err := mycli.WAClient.Download(audio)
+			ctx := context.Background()
+			data, err := mycli.WAClient.Download(ctx, audio)
 			if err != nil {
 				log.Error().Err(err).Msg("Failed to download audio")
 				return
@@ -558,7 +560,8 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 				}
 			}
 
-			data, err := mycli.WAClient.Download(document)
+			ctx := context.Background()
+			data, err := mycli.WAClient.Download(ctx, document)
 			if err != nil {
 				log.Error().Err(err).Msg("Failed to download document")
 				return
@@ -695,10 +698,10 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 
 			// if IsGroup return
 			if strings.Contains(string(values), `"IsGroup":true`) {
-            			log.Info().Msg("Payload contains IsGroup: true")
-            			return
-            		}
-			
+				log.Info().Msg("Payload contains IsGroup: true")
+				return
+			}
+
 			if path == "" {
 				data := make(map[string]string)
 				data["jsonData"] = string(values)
