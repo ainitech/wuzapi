@@ -107,11 +107,12 @@ func main() {
 		fmt.Println(err)
 	}
 
+	ctx := context.Background()
 	if *waDebug != "" {
 		dbLog := waLog.Stdout("Database", *waDebug, true)
-		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000", dbLog)
+		container, err = sqlstore.New(ctx, "sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000", dbLog)
 	} else {
-		container, err = sqlstore.New("sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000", nil)
+		container, err = sqlstore.New(ctx, "sqlite", "file:"+exPath+"/dbdata/main.db?_pragma=foreign_keys(1)&_busy_timeout=3000", nil)
 	}
 	if err != nil {
 		panic(err)
